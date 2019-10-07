@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
@@ -53,11 +54,51 @@ func (be *Route53) Setup(uri url.URL) error {
 
 // CreateDB creates a database
 func (be *Route53) CreateDB(db url.URL) error {
+	listInput := &route53.ListHostedZonesByNameInput{}
+	resp, err := be.client.ListHostedZonesByName(listInput)
+	if err != nil {
+		fmt.Println(err)
+		return err
+	}
+
+	for _, v := range resp.HostedZones {
+		hzn := *v.Name
+		if hzn == be.HostedZoneName {
+			id := *v.Id
+			id = strings.TrimPrefix(id, "/hostedzone/")
+			return fmt.Errorf("database already exists: %s", id)
+		}
+	}
+
+	t := time.Now().Unix()
+	callerRef := fmt.Sprintf("%v", t)
+	createInput := &route53.CreateHostedZoneInput{
+		CallerReference: aws.String(callerRef),
+		Name:            aws.String(be.HostedZoneName),
+	}
+	_, err = be.client.CreateHostedZone(createInput)
+	if err != nil {
+		return fmt.Errorf("failed to create database: %s", be.URI.String())
+	}
+
 	return nil
 }
 
 // DropDB deletes a database
 func (be *Route53) DropDB(db url.URL) error {
+	be.setHostedZoneID()
+	if be.HostedZoneID == "" {
+		return fmt.Errorf("database does not exist: %s", be.URI.Host)
+	}
+
+	input := &route53.DeleteHostedZoneInput{
+		Id: aws.String(be.HostedZoneID),
+	}
+	_, err := be.client.DeleteHostedZone(input)
+	if err != nil {
+		return fmt.Errorf("failed to delete database: %s", be.URI.String())
+	}
+
 	return nil
 }
 
@@ -263,8 +304,8 @@ func (be *Route53) Put(db url.URL, key, val string) error {
 }
 
 func (be *Route53) setHostedZoneID() error {
-	in := &route53.ListHostedZonesByNameInput{}
-	resp, err := be.client.ListHostedZonesByName(in)
+	input := &route53.ListHostedZonesByNameInput{}
+	resp, err := be.client.ListHostedZonesByName(input)
 
 	if err != nil {
 		fmt.Println(err)
